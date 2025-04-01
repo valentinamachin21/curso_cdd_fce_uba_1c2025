@@ -121,13 +121,26 @@ estadisticas_por_sexo_categoria <- datos_procesados %>%
 estadisticas_por_sexo_categoria <- estadisticas_por_sexo_categoria %>%
   ungroup()
 
+# Proporcion de personas 
+estadisticas_por_sexo_categoria <- estadisticas_por_sexo_categoria %>% 
+  group_by(sexo) %>% 
+  mutate(prop_personas = cantidad_personas / sum(cantidad_personas))
+
 # Calcular brecha de ingresos por género para cada categoría ocupacional
 brecha_ingresos <- estadisticas_por_sexo_categoria %>%
   select(sexo, categoria, ingreso_promedio) %>%
   pivot_wider(names_from = sexo, values_from = ingreso_promedio) %>%
   mutate(
-    brecha_porcentaje = (Varón - Mujer) / Varón * 100
+    brecha_porcentaje = (Varón - Mujer) / Mujer * 100
   )
+
+# Brecha: intento 2 con tabla larga 
+brecha_2 <- estadisticas_por_sexo_categoria %>% 
+  select(sexo,categoria,ingreso_promedio) %>% 
+  group_by(categoria) %>% 
+  mutate(brecha_porcentaje = (ingreso_promedio[sexo == 'Varón'] - ingreso_promedio[sexo == 'Mujer']) / ingreso_promedio[sexo == 'Mujer'] * 100) %>% 
+  filter(sexo == 'Varón')
+  
 
 # ---- 4. Creación de gráficos con ggplot2 (parte de tidyverse) ----
 
@@ -184,6 +197,7 @@ estadisticas_por_region <- datos_con_region %>%
 
 # Mostrar resultados
 print(estadisticas_por_region)
+View(estadisticas_por_region)
 write_csv(estadisticas_por_region, file.path(outstub,"estadisticas_por_region.csv"))
 
 # Que otras estadisticas descriptivas se pueden hacer? 
@@ -236,6 +250,7 @@ grafico_boxplot_regiones <- datos_con_region %>%
   filter(!is.na(P21) & P21 > 0 & P21 <= quantile(P21, 0.95, na.rm = TRUE)) %>% # Excluimos outliers extremos
   ggplot(aes(x = reorder(nombre_region, P21, FUN = median), y = P21)) +
   geom_boxplot(aes(fill = nombre_region), alpha = 0.7) +
+  geom_jitter(aes(fill=nombre_region),alpha=0.7) +
   labs(
     title = "Distribución de ingresos por región",
     subtitle = "Se excluyen valores extremos (por encima del percentil 95)",
