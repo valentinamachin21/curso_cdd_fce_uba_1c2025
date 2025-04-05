@@ -43,7 +43,6 @@ tryCatch({
     P21 = sample(c(NA, seq(5000, 250000, by = 5000)), 1500, replace = TRUE),  # Ingreso ocupación principal
     CAT_OCUP = sample(c(NA, 1:4), 1500, replace = TRUE),  # Categoría ocupacional
     PP07H = sample(c(NA, 5:90), 1500, replace = TRUE),    # Horas trabajadas
-    PP3E_TOT = sample(c(NA, seq(5000, 350000, by = 5000)), 1500, replace = TRUE), # Ingreso total
     REGION = sample(1:6, 1500, replace = TRUE),    # Región
     P47T = sample(c(NA, seq(3000, 200000, by = 5000)), 1500, replace = TRUE)  # Ingreso total familiar
   )
@@ -85,7 +84,7 @@ tryCatch({
     trimester = 1,
     type = "individual",
     vars = c("CODUSU", "NRO_HOGAR", "COMPONENTE", "CH04", "CH06", "PONDERA", 
-             "NIVEL_ED", "ESTADO", "P21", "CAT_OCUP", "PP07H", "PP3E_TOT",
+             "NIVEL_ED", "ESTADO", "P21", "CAT_OCUP", "PP07H",
              "REGION", "P47T")
   )
   
@@ -358,4 +357,238 @@ matriz_transicion <- transiciones_etiquetadas %>%
 
 # Mostrar matriz de transición
 matriz_transicion
+
+# -----------------------------------------------------------------------------
+# 4. LUBRIDATE: TRABAJO CON FECHAS
+# -----------------------------------------------------------------------------
+
+cat("\n\n--- EJEMPLOS DE LUBRIDATE ---\n\n")
+
+# 4.1 Crear fechas para los trimestres
+# Definir fechas de referencia para cada trimestre
+fechas_trimestres <- tibble(
+  trimestre = c("2023-T1", "2023-T2"),
+  fecha_inicio = c("2023-01-01", "2023-04-01"),
+  fecha_fin = c("2023-03-31", "2023-06-30")
+)
+
+# Convertir a formato de fecha con lubridate
+# Convertir a formato de fecha con lubridate
+fechas_trimestres <- fechas_trimestres %>%
+  mutate(
+    fecha_inicio = ymd(fecha_inicio),
+    fecha_fin = ymd(fecha_fin),
+    duracion_dias = as.numeric(fecha_fin - fecha_inicio) + 1,
+    punto_medio = fecha_inicio + floor(duracion_dias / 2)
+  )
+
+fechas_trimestres
+
+# 4.2 Añadir información temporal a nuestros datos
+datos_panel_fechas <- datos_panel %>%
+  left_join(
+    fechas_trimestres %>% select(trimestre, punto_medio),
+    by = "trimestre"
+  )
+
+# Extraer componentes de la fecha
+datos_panel_fechas <- datos_panel_fechas %>%
+  mutate(
+    anio = year(punto_medio),
+    mes = month(punto_medio),
+    trimestre_del_anio = quarter(punto_medio)
+  )
+
+# Ver algunas filas con la información temporal
+select(datos_panel_fechas, CODUSU, NRO_HOGAR, COMPONENTE, 
+       trimestre, punto_medio, anio, mes, trimestre_del_anio) %>%
+  head(10)
+
+# 4.3 Ajustar ingresos por inflación (ejemplo simulado)
+
+# Crear un índice de inflación hipotético
+indices_inflacion <- tibble(
+  fecha = ymd(c("2023-01-15", "2023-02-15", "2023-03-15", 
+                "2023-04-15", "2023-05-15", "2023-06-15")),
+  indice = c(1000, 1050, 1100, 1150, 1200, 1250)
+)
+
+# Calcular inflación promedio por trimestre
+inflacion_trimestral <- indices_inflacion %>%
+  mutate(
+    trimestre = case_when(
+      month(fecha) <= 3 ~ "2023-T1",
+      month(fecha) <= 6 ~ "2023-T2",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(trimestre)) %>%
+  group_by(trimestre) %>%
+  summarise(
+    indice_promedio = mean(indice),
+    .groups = "drop"
+  )
+
+# Determinar el último trimestre para usar como referencia
+ultimo_trimestre <- inflacion_trimestral %>%
+  filter(indice_promedio == max(indice_promedio)) %>%
+  pull(trimestre)
+
+# Coeficiente para ajustar a valores del último trimestre
+inflacion_trimestral <- inflacion_trimestral %>%
+  mutate(
+    coeficiente_ajuste = max(indice_promedio) / indice_promedio
+  )
+
+inflacion_trimestral
+
+# Ajustar ingresos por inflación
+datos_panel_ajustados <- datos_panel_fechas %>%
+  left_join(inflacion_trimestral, by = "trimestre") %>%
+  mutate(
+    P21_ajustado = P21 * coeficiente_ajuste
+  )
+
+# Comparar ingresos originales y ajustados
+datos_panel_ajustados %>%
+  filter(!is.na(P21)) %>%
+  group_by(trimestre) %>%
+  summarise(
+    ingreso_medio_original = mean(P21, na.rm = TRUE),
+    ingreso_medio_ajustado = mean(P21_ajustado, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 4.4 Análisis de tendencia (simulando más períodos)
+
+# Crear datos hipotéticos para más trimestres
+set.seed(42)
+periodos_adicionales <- tibble(
+  trimestre = c("2022-T1", "2022-T2", "2022-T3", "2022-T4", "2023-T3", "2023-T4"),
+  fecha = ymd(c("2022-02-15", "2022-05-15", "2022-08-15", "2022-11-15", 
+                "2023-08-15", "2023-11-15")),
+  tasa_desocupacion = c(10.1, 9.8, 9.2, 8.9, 8.2, 7.9)
+)
+
+# Unir con nuestros datos calculados
+tasas_desocupacion <- datos_panel %>%
+  filter(ESTADO %in% 1:2) %>%  # Solo ocupados y desocupados (PEA)
+  group_by(trimestre) %>%
+  summarise(
+    ocupados = sum(PONDERA[ESTADO == 1], na.rm = TRUE),
+    desocupados = sum(PONDERA[ESTADO == 2], na.rm = TRUE),
+    pea = sum(PONDERA,na.rm=T),
+    tasa_desocupacion = desocupados / pea * 100,
+    .groups = "drop"
+  ) %>%
+  mutate(fecha = case_when(
+    trimestre == "2023-T1" ~ ymd("2023-02-15"),
+    trimestre == "2023-T2" ~ ymd("2023-05-15"),
+    TRUE ~ as.Date(NA)
+  )) %>%
+  # Unir con los datos simulados
+  bind_rows(periodos_adicionales) %>%
+  # Ordenar por fecha
+  arrange(fecha)
+
+tasas_desocupacion
+
+# Gráfico de tendencia
+ggplot(tasas_desocupacion, aes(x = fecha, y = tasa_desocupacion)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Evolución de la tasa de desocupación",
+    x = "Trimestre",
+    y = "Tasa de desocupación (%)"
+  ) +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# -----------------------------------------------------------------------------
+# 5. COMBINANDO TODAS LAS TÉCNICAS: ANÁLISIS COMPLETO
+# -----------------------------------------------------------------------------
+
+cat("\n\n--- ANÁLISIS COMPLETO CON TODAS LAS TÉCNICAS ---\n\n")
+
+# 5.1 Calcular indicadores por región, trimestre y sexo
+indicadores_regionales <- datos_panel_ajustados %>%
+  # Unir con diccionarios para tener etiquetas
+  left_join(dic_sexo, by = "CH04") %>%
+  left_join(dic_estado, by = "ESTADO") %>%
+  left_join(dic_region, by = "REGION") %>%
+  # Filtrar solo población en edad de trabajar
+  filter(condicion != "Menor de 10 años") %>%
+  # Agrupar por región, trimestre y sexo
+  group_by(nombre_region, trimestre, sexo) %>%
+  # Calcular indicadores
+  summarise(
+    poblacion = sum(PONDERA),
+    pea = sum(PONDERA[condicion %in% c("Ocupado", "Desocupado")]),
+    ocupados = sum(PONDERA[condicion == "Ocupado"]),
+    desocupados = sum(PONDERA[condicion == "Desocupado"]),
+    ingreso_medio = mean(P21_ajustado, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Calcular tasas
+  mutate(
+    tasa_actividad = pea / poblacion * 100,
+    tasa_empleo = ocupados / poblacion * 100,
+    tasa_desocupacion = desocupados / pea * 100
+  )
+
+# 5.2 Transformar a formato ancho para comparar por sexo
+indicadores_por_sexo <- indicadores_regionales %>%
+  select(nombre_region, trimestre, sexo, tasa_actividad, tasa_empleo, 
+         tasa_desocupacion, ingreso_medio) %>%
+  pivot_wider(
+    names_from = sexo,
+    values_from = c(tasa_actividad, tasa_empleo, tasa_desocupacion, ingreso_medio)
+  ) %>%
+  # Calcular brechas de género
+  mutate(
+    brecha_actividad = tasa_actividad_Varón - tasa_actividad_Mujer,
+    brecha_empleo = tasa_empleo_Varón - tasa_empleo_Mujer,
+    brecha_desocupacion = tasa_desocupacion_Mujer - tasa_desocupacion_Varón,
+    brecha_ingresos = (ingreso_medio_Varón - ingreso_medio_Mujer) / ingreso_medio_Varón * 100
+  )
+
+# Ver resultados
+indicadores_por_sexo %>%
+  select(nombre_region, trimestre, starts_with("brecha"))
+
+# 5.3 Analizar evolución temporal
+evolucion_brechas <- indicadores_por_sexo %>%
+  # Unir con fechas
+  left_join(
+    fechas_trimestres %>% select(trimestre, punto_medio),
+    by = "trimestre"
+  ) %>%
+  # Ver evolución por región
+  select(nombre_region, trimestre, punto_medio, starts_with("brecha"))
+
+# 5.4 Visualizar brechas de género por región
+evolucion_brechas_largo <- evolucion_brechas %>%
+  select(nombre_region, trimestre, punto_medio, brecha_ingresos) %>%
+  # Convertir a formato largo para graficar por región
+  pivot_longer(
+    cols = brecha_ingresos,
+    names_to = "indicador",
+    values_to = "valor"
+  )
+
+# Graficar brecha de ingresos por región
+ggplot(evolucion_brechas_largo, 
+       aes(x = nombre_region, y = valor, fill = trimestre)) +
+  geom_col(position = "dodge") +
+  theme_minimal() +
+  labs(
+    title = "Brecha de ingresos por género según región",
+    subtitle = "Diferencia porcentual entre ingreso medio de varones y mujeres",
+    x = "Región",
+    y = "Brecha (%)",
+    fill = "Trimestre"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
